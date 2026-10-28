@@ -1,0 +1,134 @@
+name: Build Windows (exe)
+
+# Builds an unsigned Windows installer from this fork.
+#   - Manual: Actions -> "Build Windows (exe)" -> Run workflow
+#   - Tag:    git tag v1.2.3 && git push origin v1.2.3  (also attaches the exe to a GitHub Release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the build (e.g. 1.2.3). Empty = use the tag, else 0.0.0-fork.<run>"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    name: Windows x64 (NSIS installer)
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node + Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version: "24"
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-app
+          cache-on-failure: true
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache wasm-pack
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack.exe
+          key: wasm-pack-${{ runner.os }}-v1
+
+      - name: Install wasm-pack
+        run: node scripts/install-wasm-pack.cjs
+
+      - name: Cache vendored binaries
+        uses: actions/cache@v4
+        with:
+          path: crates-tauri/yaak-app-client/vendored
+          key: vendored-${{ runner.os }}-${{ hashFiles('scripts/vendor-*.cjs', 'packages/plugin-runtime/.node-version') }}
+
+      - name: Install npm dependencies
+        run: vp install
+
+      - name: Bootstrap (build packages, vendor node/protoc/plugins)
+        run: npm run bootstrap
+        env:
+          YAAK_TARGET_ARCH: x64
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${{ inputs.version }}"
+          if [ -z "$raw" ]; then raw="${GITHUB_REF_NAME}"; fi
+          v="${raw#v}"
+          if ! printf '%s' "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            v="0.0.0-fork.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+          echo "Building version $v"
+
+      - name: Stamp version
+        run: npm run replace-version
+        env:
+          YAAK_VERSION: ${{ steps.version.outputs.value }}
+
+      # Unsigned build: no Azure Trusted Signing, no updater signature.
+      # `tauri.windows-fork.conf.json` drops the upstream signCommand/key so this
+      # works without any repository secrets.
+      - name: Build app + NSIS installer
+        run: node scripts/run-build.mjs client --config crates-tauri/yaak-app-client/tauri.windows-fork.conf.json --bundles nsis
+        env:
+          YAAK_TARGET_ARCH: x64
+          SKIP_WASM_BUILD: "1"
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Get-ChildItem -Path target/release/bundle/nsis -Filter *.exe -File |
+            Where-Object { $_.Name -notlike '*.sig' } |
+            Copy-Item -Destination out
+          Get-ChildItem -Path target/release -Filter *.exe -File |
+            Where-Object { $_.Name -in @('Yaak.exe', 'yaak-app-client.exe') } |
+            Copy-Item -Destination out
+          Get-ChildItem out | Select-Object Name, @{ N = 'MB'; E = { [math]::Round($_.Length / 1MB, 1) } } | Format-Table -AutoSize
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yaak-windows-x64-${{ steps.version.outputs.value }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attach installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/bundle/nsis/*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          draft: false
