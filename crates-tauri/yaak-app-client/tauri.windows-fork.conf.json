@@ -1,19 +1,7 @@
 {
   "productName": "Yaak",
   "build": {
-    "features": ["license", "wry"]
-  },
-  "app": {
-    "security": {
-      "capabilities": [
-        "default",
-        {
-          "identifier": "release",
-          "windows": ["*"],
-          "permissions": ["yaak-license:default"]
-        }
-      ]
-    }
+    "features": ["wry"]
   },
   "bundle": {
     "active": true,
