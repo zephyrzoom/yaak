@@ -1,0 +1,35 @@
+{
+  "productName": "Yaak",
+  "build": {
+    "features": ["license", "wry"]
+  },
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "release",
+          "windows": ["*"],
+          "permissions": ["yaak-license:default"]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "publisher": "Yaak",
+    "license": "MIT",
+    "copyright": "Yaak",
+    "homepage": "https://yaak.app",
+    "category": "DeveloperTool",
+    "shortDescription": "Play with APIs, intuitively",
+    "longDescription": "A cross-platform desktop app for interacting with REST, GraphQL, and gRPC",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}
